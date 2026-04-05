@@ -10,99 +10,143 @@ Anchor3DLane 是一个基于锚框回归的单目 3D 车道检测算法，包含
 
 ---
 
-## 二、目录结构
+## 二、目录结构与逐文件职责
 
-```
-Anchor3DLane-main/
-├── configs/                     # 配置文件
-│   ├── apollosim/              # ApolloSim 数据集配置
-│   │   ├── anchor3dlane.py
-│   │   └── anchor3dlane_iter.py
-│   ├── openlane/               # OpenLane 数据集配置
-│   │   ├── anchor3dlane.py
-│   │   ├── anchor3dlane_effb3.py
-│   │   ├── anchor3dlane_iter.py
-│   │   └── anchor3dlane_mf.py  # 多帧版本
-│   └── once/                   # ONCE-3DLane 数据集配置
-│
-├── data/                        # 数据目录
-│   ├── Apollosim/
-│   ├── OpenLane/
-│   └── ONCE/
-│
-├── mmseg/                       # 核心代码库 (基于 MMSegmentation v0.26)
-│   ├── apis/                   # API 接口
-│   │   ├── train.py            # 训练 API
-│   │   ├── test.py             # 测试 API
-│   │   ├── test_openlane.py    # OpenLane 评测
-│   │   ├── test_apollosim.py   # ApolloSim 评测
-│   │   └── test_once.py        # ONCE 评测
-│   │
-│   ├── core/                   # 核心功能
-│   │   ├── evaluation/         # 评估指标 (F1, AP, 等)
-│   │   ├── hook/               # 训练钩子
-│   │   ├── optimizers/         # 优化器构建
-│   │   └── seg/                # 分割相关
-│   │
-│   ├── datasets/               # 数据集
-│   │   ├── lane_datasets/      # 3D 车道数据集
-│   │   │   ├── openlane.py
-│   │   │   ├── apollosim.py
-│   │   │   ├── once.py
-│   │   │   └── openlane_temporal.py  # 多帧数据
-│   │   └── pipelines/          # 数据增强管道
-│   │       ├── loading.py
-│   │       ├── transforms.py
-│   │       ├── lane_format.py
-│   │       └── formatting.py
-│   │
-│   ├── models/                 # 模型定义
-│   │   ├── lane_detector/      # 【核心】Anchor3DLane 检测器
-│   │   │   ├── anchor_3dlane.py        # 基础版本
-│   │   │   ├── anchor_3dlane_deform.py # Anchor3DLane++ (可变形注意力)
-│   │   │   ├── anchor_3dlane_multiframe.py  # 多帧版本
-│   │   │   ├── transformer.py          # Transformer 编码器
-│   │   │   ├── position_encoding.py    # 位置编码
-│   │   │   ├── msda.py                 # 多尺度可变形注意力
-│   │   │   ├── tools.py                # 工具函数 (单应性变换)
-│   │   │   ├── utils/                  # 工具模块
-│   │   │   │   ├── anchor.py           # 锚框生成器
-│   │   │   │   └── nms.py              # 3D NMS
-│   │   │   └── assigner/               # 锚框 - 真值匹配
-│   │   │       ├── topk_assigner.py
-│   │   │       └── distance_metric.py
-│   │   │
-│   │   ├── losses/             # 损失函数
-│   │   │   ├── lane_loss.py    # 车道检测损失
-│   │   │   ├── kornia_focal.py # Focal Loss
-│   │   │   └── ...
-│   │   │
-│   │   ├── backbones/          # 主干网络
-│   │   │   ├── resnet.py
-│   │   │   ├── efficientnet.py
-│   │   │   └── ...
-│   │   ├── necks/              # 颈部网络
-│   │   └── builder.py          # 模型构建器
-│   │
-│   └── utils/                  # 工具函数
-│
-├── tools/                       # 工具脚本
-│   ├── train.py                # 训练入口
-│   ├── test.py                 # 测试入口
-│   ├── dist_train.sh           # 分布式训练脚本
-│   ├── dist_test.sh            # 分布式测试脚本
-│   └── convert_datasets/       # 数据集转换工具
-│       ├── openlane.py
-│       ├── apollosim.py
-│       └── once.py
-│
-├── gen-efficientnet-pytorch/    # EfficientNet 实现 (第三方依赖)
-├── pretrained/                  # 预训练权重目录
-├── requirements.txt             # Python 依赖
-├── setup.py                     # 安装脚本
-└── README.md                    # 项目说明
-```
+说明：本节按当前仓库实际代码整理（Anchor3DLanePM），重点覆盖“训练/推理主路径会用到的文件”。
 
+### 2.1 顶层文件
+
+| 文件 | 作用 |
+|------|------|
+| `ARCHITECTURE.md` | 架构说明文档（本文件）。 |
+| `README.md` | 安装、训练、测试与复现实验入口说明。 |
+| `requirements.txt` | Python 依赖清单。 |
+| `setup.py` | 项目可编辑安装入口（`python setup.py develop`）。 |
+| `setup.cfg` | 代码风格/工具链配置。 |
+
+### 2.2 `configs/`（训练实验定义）
+
+#### `configs/openlane/`
+
+| 文件 | 作用 |
+|------|------|
+| `anchor3dlane.py` | OpenLane 单帧基线（ResNet18 + 单阶段回归）。 |
+| `anchor3dlane_iter.py` | OpenLane 迭代回归版本（`iter_reg=1`，带 `loss_aux`）。 |
+| `anchor3dlane_effb3.py` | OpenLane EfficientNet-B3 骨干版本。 |
+| `anchor3dlane_iter_r50.py` | OpenLane 高分辨率 + ResNet50 + Deform 版本（`Anchor3DLaneDeform`）。 |
+| `anchor3dlane_mf.py` | OpenLane 多帧版本（`OpenlaneMFDataset` + `Anchor3DLaneMF`）。 |
+| `anchor3dlane_mf_iter.py` | OpenLane 多帧 + 迭代回归版本。 |
+
+#### `configs/apollosim/`
+
+| 文件 | 作用 |
+|------|------|
+| `anchor3dlane.py` | ApolloSim 单帧基线，类别数为 2。 |
+| `anchor3dlane_iter.py` | ApolloSim 两阶段/迭代回归版本。 |
+
+#### `configs/once/`
+
+| 文件 | 作用 |
+|------|------|
+| `anchor3dlane.py` | ONCE 单帧基线，`anchor_y_steps` 为近距分布（2~50m）。 |
+| `anchor3dlane_iter.py` | ONCE 迭代回归版本。 |
+| `anchor3dlane_effb3.py` | ONCE EfficientNet-B3 骨干版本。 |
+
+### 2.3 `mmseg/apis/`（训练/测试 API）
+
+| 文件 | 作用 |
+|------|------|
+| `__init__.py` | 统一导出训练、推理和三个数据集测试函数。 |
+| `train.py` | 通用训练 API（构建 dataloader、runner、hook）。 |
+| `test.py` | MMSeg 通用测试流程（single/multi-gpu）。 |
+| `test_openlane.py` | OpenLane 专用后处理 + 指标评测 + 可视化。 |
+| `test_apollosim.py` | ApolloSim 专用后处理与评测。 |
+| `test_once.py` | ONCE 专用后处理与评测。 |
+| `inference.py` | 离线推理接口（`init_segmentor` / `inference_segmentor`）。 |
+
+### 2.4 `mmseg/models/lane_detector/`（核心）
+
+| 文件 | 作用 |
+|------|------|
+| `__init__.py` | 注册并导出三种 detector。 |
+| `anchor_3dlane.py` | 单帧主模型：锚框采样、回归头、NMS、loss 入口都在这里。 |
+| `anchor_3dlane_deform.py` | Anchor3DLane++ 版本，用 `MSDALayer` 替换标准 Transformer 编码。 |
+| `anchor_3dlane_multiframe.py` | 多帧版本，使用 TransformerDecoderLayer 融合历史帧锚特征。 |
+| `transformer.py` | 标准 Transformer 编码/解码层实现（基于 DETR 风格改造）。 |
+| `position_encoding.py` | 2D/3D 正弦位置编码实现。 |
+| `msda.py` | 多尺度可变形注意力编码层封装（调用 `MSDeformAttn`）。 |
+| `tools.py` | 几何与可视化辅助函数（含 `homography_crop_resize`）。 |
+
+#### `mmseg/models/lane_detector/assigner/`
+
+| 文件 | 作用 |
+|------|------|
+| `__init__.py` | 导出多种 anchor-gt 匹配器。 |
+| `distance_metric.py` | 距离度量：Euclidean/Manhattan/Partial/FV。 |
+| `thresh_assigner.py` | 基于阈值划分正负样本。 |
+| `topk_assigner.py` | 基于 Top-K 的正样本分配（主用）。 |
+| `topk_fv_assigner.py` | 融合 2D-FV 与 3D 距离的 Top-K 分配。 |
+
+#### `mmseg/models/lane_detector/utils/`
+
+| 文件 | 作用 |
+|------|------|
+| `__init__.py` | 导出锚框生成与 NMS。 |
+| `anchor.py` | 3D 锚框生成器（pitch/yaw/x 起点离散化）。 |
+| `nms.py` | 3D 几何 NMS。 |
+
+### 2.5 `mmseg/models/losses/`（损失）
+
+| 文件 | 作用 |
+|------|------|
+| `lane_loss.py` | 车道检测主损失：分类 + x/z/vis 回归。 |
+| `kornia_focal.py` | FocalLoss 实现。 |
+| `focal_loss.py` / `cross_entropy_loss.py` / `dice_loss.py` / `lovasz_loss.py` / `accuracy.py` / `utils.py` | MMSeg 通用损失与工具。 |
+
+### 2.6 `mmseg/datasets/lane_datasets/`（数据集）
+
+| 文件 | 作用 |
+|------|------|
+| `openlane.py` | OpenLane 单帧数据集：读取 `.pkl` 标注、格式转换与评测。 |
+| `openlane_temporal.py` | OpenLane 多帧数据集：采样前后帧与位姿。 |
+| `apollosim.py` | ApolloSim 数据集封装与评测。 |
+| `once.py` | ONCE-3DLane 数据集封装与评测。 |
+| `__init__.py` | 为空（不做额外导出逻辑）。 |
+
+### 2.7 `mmseg/datasets/pipelines/`（预处理流水线）
+
+| 文件 | 作用 |
+|------|------|
+| `compose.py` | pipeline 组合器。 |
+| `loading.py` | 读图/读标注（支持多帧图片堆叠）。 |
+| `transforms.py` | Resize/Normalize/PhotoMetricDistortion 等增强。 |
+| `lane_format.py` | 车道任务专用格式打包（DataContainer）。 |
+| `formatting.py` | MMSeg 通用格式化组件（Collect/ToTensor 等）。 |
+| `formating.py` | 兼容旧命名的弃用入口。 |
+| `test_time_aug.py` | 测试时多尺度/翻转增强。 |
+| `__init__.py` | 汇总导出 pipeline 组件。 |
+
+### 2.8 `tools/`（命令行入口与辅助脚本）
+
+| 文件 | 作用 |
+|------|------|
+| `train.py` | 推荐训练入口，按配置构建 model/dataset/runner。 |
+| `test.py` | 推荐测试入口，自动按数据集选择 `test_openlane/once/apollosim`。 |
+| `train_dist.py` | 另一份分布式训练入口（与 `train.py` 功能重叠）。 |
+| `dist_train.sh` / `dist_test.sh` / `slurm_train.sh` / `slurm_test.sh` | 多机多卡脚本封装。 |
+| `benchmark.py` / `analyze_logs.py` / `get_flops.py` / `print_config.py` | 训练日志与性能分析。 |
+| `pytorch2onnx.py` / `onnx2tensorrt.py` / `pytorch2torchscript.py` | 导出与部署转换。 |
+| `publish_model.py` / `deploy_test.py` / `confusion_matrix.py` | 发布与评测辅助工具。 |
+
+#### `tools/convert_datasets/`
+
+| 文件 | 作用 |
+|------|------|
+| `openlane.py` | OpenLane 原始标注 -> 训练 `.pkl` 缓存（含可选平滑）。 |
+| `apollosim.py` | ApolloSim 原始 JSON -> 训练 `.pkl`。 |
+| `once.py` | ONCE 原始标注合并与 `.pkl` 生成。 |
+
+---
 ---
 
 ## 三、核心模块详解
@@ -166,10 +210,19 @@ Anchor3DLane-main/
 
 ### 3.3 锚框设计
 
-**锚框结构** (每个锚框 5 + 3×L 维，L=20):
+**实现层面说明（事实校正）**
+
+代码里的训练/推理张量并不是 `[pitch, yaw, ...]` 这种显式参数化形式，而是：
+
 ```
-[pitch, yaw, start_y, end_y, confidence, x_1...x_L, z_1...z_L, vis_1...vis_L]
+[meta(5), x_1...x_L, z_1...z_L, vis_1...vis_L, cls_logits(C)]
 ```
+
+- `meta(5)`：数据集相关元字段（不同数据集的具体语义略有差异，常用到类别、有效范围等）。
+- `x/z/vis`：沿 `y_steps` 的离散采样值。
+- `cls_logits(C)`：分类输出（`C=num_category`），在 `get_proposals()` 末尾拼接。
+
+几何先验（pitch/yaw/x 起点）主要体现在 `AnchorGenerator.generate_anchor()` 的锚线生成过程中，而不是直接作为训练目标向量前几维。
 
 **生成策略** (`utils/anchor.py`):
 - **X 范围**: -30m ~ 30m (45 个起始位置)
@@ -330,29 +383,132 @@ model = dict(type='Anchor3DLane', ...)  # 自动查找注册类
 
 ---
 
-## 八、关键类/函数索引
+## 八、关键模块代码级分析
 
-### 8.1 核心类
+### 8.1 单帧模型主干：`Anchor3DLane`
 
-| 类名 | 文件 | 说明 |
-|------|------|------|
-| `Anchor3DLane` | `anchor_3dlane.py` | 基础检测器 |
-| `Anchor3DLaneDeform` | `anchor_3dlane_deform.py` | 可变形注意力版本 |
-| `Anchor3DLaneMF` | `anchor_3dlane_multiframe.py` | 多帧检测器 |
-| `AnchorGenerator` | `utils/anchor.py` | 锚框生成器 |
-| `LaneLoss` | `losses/lane_loss.py` | 损失函数 |
-| `TopkAssigner` | `assigner/topk_assigner.py` | Top-K 匹配 |
+核心文件：`mmseg/models/lane_detector/anchor_3dlane.py`
 
-### 8.2 关键函数
+关键调用链：
 
-| 函数 | 文件 | 说明 |
-|------|------|------|
-| `feature_extractor()` | `anchor_3dlane.py:226` | 特征提取 (Backbone+Transformer) |
-| `cut_anchor_features()` | `anchor_3dlane.py:201` | 锚框特征采样 |
-| `get_proposals()` | `anchor_3dlane.py:249` | 生成回归提议 |
-| `encoder_decoder()` | `anchor_3dlane.py:289` | 编码器 - 解码器前向 |
-| `nms_3d()` | `utils/nms.py:12` | 3D 非极大值抑制 |
-| `homography_crop_resize()` | `tools.py` | 单应性变换 |
+1. `forward_train()` / `forward_test()`
+2. `encoder_decoder()`
+3. `feature_extractor()` + `anchor_projection`
+4. `get_proposals()`（可迭代）
+5. 训练走 `loss()`，测试走 `nms()`
+
+`feature_extractor()` 的真实行为：
+
+- 用 backbone（可选 neck）取 feature map。
+- `input_proj(1x1 conv)` 统一通道到 `attn_dim`。
+- 构建 mask 与 `PositionEmbeddingSine`。
+- 将 `[B,C,H,W]` 拉平成 `[HW,B,C]` 送入 `TransformerEncoderLayer`。
+
+这一步决定了后续锚特征采样的空间语义质量。
+
+### 8.2 锚特征采样与回归：`cut_anchor_features()` + `get_proposals()`
+
+关键点：
+
+1. `projection_transform()` 把 `(x,y,z)` 通过 `3x4` 投影矩阵映射到特征图坐标 `(u,v)`。
+2. 坐标归一化到 `[-1,1]` 后，用 `F.grid_sample` 直接采样锚点序列特征。
+3. 采样结果经 `DecodeLayer` 分别输出分类、`x/z` 偏移和可见性。
+4. 若 `iter_reg>0`，第 `t+1` 阶段以上一阶段 proposal 作为新锚继续细化。
+
+这套设计的实质是“几何先验引导的序列采样 + 逐步残差回归”。
+
+### 8.3 匹配策略：`TopkAssigner`
+
+核心文件：`mmseg/models/lane_detector/assigner/topk_assigner.py`
+
+算法要点：
+
+- 先构建 proposal-target 的全连接距离矩阵 `D ∈ R^{Np×Nt}`。
+- 距离由 `distance_metric.py` 提供，默认是可见性加权的 3D Euclidean。
+- 每个 GT 取 Top-K 最近 proposal 作为候选正样本。
+- 再做一次“同一 proposal 只归属最近 GT”的冲突消解。
+- 负样本从其余 proposal 中随机采样，数量受 `neg_k` 限制。
+
+相比固定阈值匹配，Top-K 在车道密集场景更稳，不容易出现正样本不足。
+
+### 8.4 损失实现：`LaneLoss`
+
+核心文件：`mmseg/models/losses/lane_loss.py`
+
+代码行为拆解：
+
+1. 先把 GT 从原始密集长度（如 200）按 `anchor_steps` 下采样到锚长度 `L`。
+2. 用 assigner 得到 `positives/negatives/gt_idx`。
+3. 分类：`FocalLoss(cls_pred, cls_target)`。
+4. 回归：`SmoothL1(x,z,vis)`，其中 `x/z` 会乘以 `vis_target` 做可见性加权。
+5. batch 内求均值后，再乘配置中的 `loss_weights`。
+
+### 8.5 后处理：`nms_3d`
+
+核心文件：`mmseg/models/lane_detector/utils/nms.py`
+
+NMS 不是 2D 框 IoU，而是“可见点重合区域上的 3D 点距”抑制：
+
+- 先按得分降序取当前 lane。
+- 对剩余 lane 计算重叠可见点处的平均欧氏距离。
+- 距离小于阈值视为重复，剔除。
+
+该策略与车道几何更一致，能避免 2D NMS 的视角偏置。
+
+### 8.6 多帧版本：`Anchor3DLaneMF`
+
+核心文件：`mmseg/models/lane_detector/anchor_3dlane_multiframe.py`
+
+关键机制：
+
+- 当前帧与历史帧都做锚点采样。
+- 当前帧锚特征作为 query，历史帧锚特征作为 memory。
+- 用 `nn.TransformerDecoderLayer` 做时序融合后再回归。
+
+因此多帧增益主要来自“锚级别时序上下文”，而不是简单图像级拼接。
+
+### 8.7 可变形注意力版本：`Anchor3DLaneDeform`
+
+核心文件：
+
+- `mmseg/models/lane_detector/anchor_3dlane_deform.py`
+- `mmseg/models/lane_detector/msda.py`
+- `mmseg/models/utils/ops/modules/ms_deform_attn.py`
+
+与基础版差异：
+
+- 编码器由标准 self-attention 改为 `MSDeformAttn`。
+- 通过多尺度 reference points 做稀疏采样，降低高分辨率下的注意力成本。
+- 配置中常配合更强 backbone（如 ResNet50 + DCN）使用。
+
+### 8.8 数据流代码落点
+
+训练样本是如何进入模型的：
+
+1. 数据集 `__getitem__()`：读取图像路径、`.pkl` 标注、相机参数并组装 `results`。
+2. `Compose` 顺序执行 pipeline。
+3. `LaneFormat` 将 `img/gt_3dlanes/gt_project_matrix/mask` 打包成 DataContainer。
+4. `Collect` 只保留模型前向所需 key。
+
+多帧场景下，`OpenlaneMFDataset` 还会补充：
+
+- `prev_images`
+- `prev_poses`
+
+并由 `LoadImageFromFile(extra_keys='prev_images')` 一并加载并堆叠。
+
+### 8.9 核心索引（便于跳转）
+
+| 模块 | 入口文件 | 关键函数/类 |
+|------|----------|-------------|
+| 单帧检测器 | `anchor_3dlane.py` | `feature_extractor`, `cut_anchor_features`, `get_proposals`, `encoder_decoder` |
+| 可变形检测器 | `anchor_3dlane_deform.py` | `Anchor3DLaneDeform.feature_extractor` |
+| 多帧检测器 | `anchor_3dlane_multiframe.py` | `Anchor3DLaneMF.get_proposals`, `Anchor3DLaneMF.encoder_decoder` |
+| 匹配器 | `assigner/topk_assigner.py` | `match_proposals_with_targets` |
+| 损失 | `losses/lane_loss.py` | `LaneLoss.forward` |
+| NMS | `utils/nms.py` | `nms_3d` |
+| 数据集 | `lane_datasets/*.py` | `__getitem__`, `format_results`, `eval` |
+| 数据流水线 | `pipelines/*.py` | `LoadImageFromFile`, `Normalize`, `LaneFormat`, `Collect` |
 
 ---
 
@@ -460,4 +616,4 @@ python tools/test.py configs/openlane/anchor3dlane.py checkpoint.pth --show-dir 
 
 ---
 
-*文档生成时间：2026-04-03*
+*文档生成时间：2026-04-04*
