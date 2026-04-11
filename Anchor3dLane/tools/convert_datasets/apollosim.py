@@ -2,12 +2,28 @@ import os
 import json
 import cv2
 import glob
-from mmseg.datasets.tools.utils import *
+import argparse
+from pathlib import Path
+import importlib.util
+
+try:
+    from mmseg.datasets.tools.utils import *  # type: ignore
+except Exception:
+    # Fallback: load utils.py directly to avoid requiring mmcv/mmseg installation
+    _repo_root = Path(__file__).resolve().parents[2]
+    _utils_path = _repo_root / 'mmseg' / 'datasets' / 'tools' / 'utils.py'
+    _spec = importlib.util.spec_from_file_location('anchor3dlane_mmseg_utils', _utils_path)
+    if _spec is None or _spec.loader is None:
+        raise ImportError(f'Failed to load utils from {_utils_path}')
+    _mod = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    for _name in dir(_mod):
+        if not _name.startswith('_'):
+            globals()[_name] = getattr(_mod, _name)
 from scipy.optimize import curve_fit
 from scipy.interpolate import interp1d
 import numpy as np
 import matplotlib.pyplot as plt
-import mmcv
 import pickle
 
 def make_lane_y_mono_inc(lane):
@@ -107,7 +123,8 @@ def extract_data(ori_json, data_root, tar_path, test_mode=False, sample_step=1):
 
             }
             image_id += 1
-            print("image_id", image_id, cnt_idx)
+            if cnt_idx % 2000 == 0:
+                print("processed", cnt_idx, "lines")
             if test_mode and image_id != cnt_idx:
                 raise Exception("missing test files")
 
@@ -123,10 +140,8 @@ def extract_data(ori_json, data_root, tar_path, test_mode=False, sample_step=1):
         anno['gt_camera_height'] = new_anno['gt_camera_height']
         anno['old_anno'] = new_anno['old_anno']
         pickle_path = os.path.join(tar_path, anno['filename'].split('/')[-2])
-        mmcv.mkdir_or_exist(pickle_path)
+        os.makedirs(pickle_path, exist_ok=True)
         pickle_file = os.path.join(tar_path, '/'.join(anno['filename'].split('/')[-2:]).replace('.jpg', '.pkl'))
-        print("path:", pickle_path)
-        print("file:", pickle_file)
         w = open(pickle_file, 'wb')
         pickle.dump({'image_id':anno['filename'],
                      'gt_3dlanes':anno['gt_3dlanes'],
@@ -179,9 +194,8 @@ def transform_annotation(anno, max_lanes=7, anchor_len=200, begin_idx=5):
 
 def generate_datalist(cache_path, data_list, annotation):
     all_cache_file = glob.glob(os.path.join(cache_path, '*', '*.pkl'))
-    select_files = []
-    with open(annotation, 'r') as f:
-        select_files = [json.loads(s)['raw_file'] for s in r.readlines()]
+    with open(annotation, 'r') as r:
+        select_files = {json.loads(s)['raw_file'] for s in r.readlines()}
     with open(data_list, 'w') as w:
         for item in all_cache_file:
             id = '/'.join(item[:-4].split('/')[-2:])
@@ -190,7 +204,7 @@ def generate_datalist(cache_path, data_list, annotation):
                 w.write(file_name + '\n')
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Process Openlane dataset')
+    parser = argparse.ArgumentParser(description='Process ApolloSim dataset')
     parser.add_argument('data_root', help='root path of openlane dataset')
     args = parser.parse_args()
     split = ['standard', 'illus_chg', 'rare_subset']
@@ -198,7 +212,7 @@ if __name__ == '__main__':
         tar_path = os.path.join(args.data_root, 'cache_dense')
         ori_json = os.path.join(args.data_root, 'data_splits/{}/train.json'.format(s))
         data_list_path = os.path.join(args.data_root, 'data_lists/{}'.format(s))
-        mmcv.mkdir_or_exist(data_list_path)
+        os.makedirs(data_list_path, exist_ok=True)
         extract_data(ori_json, args.data_root, tar_path, False)
         generate_datalist(tar_path, os.path.join(data_list_path, 'train.txt'), ori_json)
         ori_json = os.path.join(args.data_root, 'data_splits/{}/test.json'.format(s))

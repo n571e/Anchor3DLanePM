@@ -1,0 +1,59 @@
+# Common OS / editor clutter
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Python build and cache artifacts
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Training outputs and checkpoints
+work_dirs/
+work_dir/
+outputs/
+output/
+logs/
+log/
+checkpoints/
+*.pth
+*.pt
+*.ckpt
+*.onnx
+
+# Dataset archives and downloads
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.gz
+*.7z
+*.rar
+
+# Large dataset contents
+Anchor3dLane/data/Apollosim/
+Anchor3dLane/data/ONCE/
+Anchor3dLane/data/OpenLane/
+Anchor3dLane/data/**/cache_dense/
+Anchor3dLane/data/**/data_lists/
+Anchor3dLane/data/**/data_splits/
+Anchor3dLane/data/**/images/
+Anchor3dLane/data/**/labels/
+Anchor3dLane/data/**/segmentation/
+Anchor3dLane/data/**/depth/
+Anchor3dLane/data/**/annotations/
+Anchor3dLane/data/**/lane3d_1000/
+Anchor3dLane/data/**/lane3d_300/
+Anchor3dLane/data/**/prev_data_release/
+
+# Top-level dataset bundles in this workspace
+Apollo_Sim_3D_Lane_Release.zip
+lane3d_1000_training.tar
+lane3d_1000_validation_test.tar
+lane3d_300.tar
+origin_ONCE_3DLanes.tar

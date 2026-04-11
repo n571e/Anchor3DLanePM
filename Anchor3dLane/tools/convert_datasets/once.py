@@ -1,12 +1,27 @@
 import os
 import json
 import numpy as np
-import mmcv
 import tqdm
 import pickle
 import argparse
 import glob
-from mmseg.datasets.tools.utils import *
+from pathlib import Path
+import importlib.util
+
+try:
+    from mmseg.datasets.tools.utils import *  # type: ignore
+except Exception:
+    # Fallback: load utils.py directly to avoid requiring mmcv/mmseg installation
+    _repo_root = Path(__file__).resolve().parents[2]
+    _utils_path = _repo_root / 'mmseg' / 'datasets' / 'tools' / 'utils.py'
+    _spec = importlib.util.spec_from_file_location('anchor3dlane_mmseg_utils', _utils_path)
+    if _spec is None or _spec.loader is None:
+        raise ImportError(f'Failed to load utils from {_utils_path}')
+    _mod = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    for _name in dir(_mod):
+        if not _name.startswith('_'):
+            globals()[_name] = getattr(_mod, _name)
 
 def make_lane_y_mono_inc(lane):
     """
@@ -96,7 +111,8 @@ def extract_data(anno_file, data_root, target_path, max_lanes=8, test_mode=False
                 'json_line': info_dict
             }
             image_id += 1
-            print("image_id", image_id, cnt_idx)
+            if cnt_idx % 2000 == 0:
+                print("processed", cnt_idx, "lines")
             if test_mode and image_id != cnt_idx:
                 raise Exception("missing test files")
     print("total_len of old anno", len(old_annotations))
@@ -110,10 +126,8 @@ def extract_data(anno_file, data_root, target_path, max_lanes=8, test_mode=False
         anno['gt_camera_intrinsic'] = new_anno['gt_camera_intrinsic']
         anno['old_anno'] = new_anno['old_anno']
         pickle_path = os.path.join(target_path, '/'.join(anno['filename'].split('/')[-3:-1]))
-        mmcv.mkdir_or_exist(pickle_path)
+        os.makedirs(pickle_path, exist_ok=True)
         pickle_file = os.path.join(target_path, '/'.join(anno['filename'].split('/')[-3:]).replace('.jpg', '.pkl'))
-        print("path:", pickle_path)
-        print("file:", pickle_file)
         w = open(pickle_file, 'wb')
         pickle.dump({'image_id':anno['filename'],
                         'gt_3dlanes':anno['gt_3dlanes'],
@@ -157,14 +171,35 @@ def transform_annotation(anno, max_lanes=8, anchor_len=50, test_mode=False):
 
 def merge_annotations(anno_path, json_file):
     all_files = glob.glob(os.path.join(anno_path, '*', 'cam01', '*.json'))
-    w = open(json_file, 'w')
-    for idx, file_name in enumerate(all_files):
-        with open(file_name, 'r') as f:
-            data = json.load(f)
-        data['filename'] = '/'.join(file_name.split('/')[-3:])[:-5]
-        s = json.dumps(data)
-        w.write(s+'\n')
-    w.close()
+    bad = 0
+    written = 0
+    with open(json_file, 'w') as w:
+        for idx, file_name in enumerate(all_files, start=1):
+            try:
+                if os.path.getsize(file_name) == 0:
+                    bad += 1
+                    continue
+                with open(file_name, 'r') as f:
+                    s = f.read().strip()
+            except OSError:
+                bad += 1
+                continue
+
+            if not s or not (s.startswith('{') and s.endswith('}')):
+                bad += 1
+                continue
+
+            filename = '/'.join(file_name.split('/')[-3:])[:-5]
+            inner = s[1:-1].strip()
+            if inner:
+                w.write('{"filename":' + json.dumps(filename) + ',' + inner + '}\n')
+            else:
+                w.write('{"filename":' + json.dumps(filename) + '}\n')
+            written += 1
+            if idx % 5000 == 0:
+                print('scanned', idx, 'files; written', written, 'bad', bad)
+    print('merge done:', json_file)
+    print('written:', written, 'bad:', bad, 'total:', len(all_files))
 
 def generate_datalist(cache_path, data_list, annotation):
     all_cache_file = glob.glob(os.path.join(cache_path, '*', 'cam01', '*.pkl'))
@@ -184,16 +219,16 @@ if __name__ == '__main__':
     parser.add_argument('--generate', action='store_true', default=False, help='whether to pickle files')
     args = parser.parse_args()
     if args.merge:
-        mmcv.mkdir_or_exist(os.path.join(args.data_root, 'data_splits'))
+        os.makedirs(os.path.join(args.data_root, 'data_splits'), exist_ok=True)
         merge_annotations(os.path.join(args.data_root, 'annotations', 'train'), os.path.join(args.data_root, 'data_splits', 'train.json'))
         merge_annotations(os.path.join(args.data_root, 'annotations', 'val'), os.path.join(args.data_root, 'data_splits', 'val.json'))
     elif args.generate:
         tar_path = os.path.join(args.data_root, 'cache_dense')
         anno_file = os.path.join(args.data_root, 'data_splits/train.json')
         data_list_path = os.path.join(args.data_root, 'data_lists')
-        mmcv.mkdir_or_exist(data_list_path, exist_ok=True)
+        os.makedirs(data_list_path, exist_ok=True)
         extract_data(anno_file, args.data_root, tar_path, test_mode=False)
-        generate_datalist(tar_path, os.path.join(data_list_path, 'train.txt', anno_file))
+        generate_datalist(tar_path, os.path.join(data_list_path, 'train.txt'), anno_file)
         anno_file = os.path.join(args.data_root, 'data_splits/val.json')
         extract_data(anno_file, args.data_root, tar_path, test_mode=True)
-        generate_datalist(tar_path, os.path.join(data_list_path, 'val.txt', anno_file))
+        generate_datalist(tar_path, os.path.join(data_list_path, 'val.txt'), anno_file)
