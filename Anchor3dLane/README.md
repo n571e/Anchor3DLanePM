@@ -103,6 +103,7 @@ We also provide the cross-frame pose extraction script at `tools/convert_dataset
 You can fetch the raw pose data link at [Baidu Drive](https://pan.baidu.com/s/1bgLSgO9wiypOsjNjRKcJZA?pwd=69mh) or extract the raw pose data with tools provided in [save_pose()](https://github.com/fundamentalvision/BEVFormer/blob/master/tools/data_converter/waymo_converter.py#L353).
 
 **(optional) 4.** For the camera-LiDAR fusion settings in Anchor3dlane++, please extract points data from [Waymo dataset](https://waymo.com/open/) and save each item into a `pkl' file. We provide an example at [lidar_example](https://huggingface.co/nowherespyfly/anchor3dlane/blob/main/1507332769891062.pkl) for reference.
+**(optional) 4.** For the camera-LiDAR fusion settings in Anchor3dlane++, we also provide LiDAR data ([Baidu Drive](https://pan.baidu.com/s/1fxwyLeueTQKg6iBhFeIAog?pwd=7qkx)), extracted from the original [Waymo dataset](https://waymo.com/open/). If you prefer customized processing, you can also extract points data yourself and save each item into a `pkl` file. We provide an example at [lidar_example](https://huggingface.co/nowherespyfly/anchor3dlane/blob/main/1507332769891062.pkl) for reference.
 
 ### ONCE-3DLane
 **1.** Refer to [ONCE-3DLane Dataset](https://github.com/once-3dlanes/once_3dlanes_benchmark) for data downloading and organize the data folder as mentioned above.
