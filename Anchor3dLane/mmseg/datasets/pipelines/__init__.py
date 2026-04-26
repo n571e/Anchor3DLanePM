@@ -10,7 +10,10 @@ from .transforms import (CLAHE, AdjustGamma, Normalize, Pad,
                          PhotoMetricDistortion, RandomCrop, RandomCutOut,
                          RandomFlip, RandomMosaic, RandomRotate, Rerange,
                          Resize, RGB2Gray, SegRescale,)
-from .voxelization import Voxelization
+try:
+    from .voxelization import Voxelization
+except ModuleNotFoundError:
+    Voxelization = None
 
 __all__ = [
     'Compose', 'to_tensor', 'ToTensor', 'ImageToTensor', 'ToDataContainer',

@@ -9,7 +9,10 @@ from .shape_convert import (nchw2nlc2nchw, nchw_to_nlc, nlc2nchw2nlc,
                             nlc_to_nchw)
 from .up_conv_block import UpConvBlock
 from .misc import get_paddings_indicator
-from .ops.modules import MSDeformAttn
+try:
+    from .ops.modules import MSDeformAttn
+except ModuleNotFoundError:
+    MSDeformAttn = None
 
 __all__ = [
     'ResLayer', 'SelfAttentionBlock', 'make_divisible', 'InvertedResidual',

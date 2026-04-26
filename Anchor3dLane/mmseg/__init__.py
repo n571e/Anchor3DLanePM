@@ -2,7 +2,15 @@
 import warnings
 
 import mmcv
+import numpy as np
 from packaging.version import parse
+
+if not hasattr(np, 'float'):
+    np.float = float
+if not hasattr(np, 'int'):
+    np.int = int
+if not hasattr(np, 'bool'):
+    np.bool = bool
 
 from .version import __version__, version_info
 

@@ -7,7 +7,41 @@ Date: March, 2020
 
 from __future__ import print_function
 import numpy as np
-from ortools.graph import pywrapgraph
+try:
+    from ortools.graph import pywrapgraph
+except ImportError:
+    from ortools.graph.python import min_cost_flow
+
+    class _SimpleMinCostFlowCompat(min_cost_flow.SimpleMinCostFlow):
+        def AddArcWithCapacityAndUnitCost(self, tail, head, capacity, unit_cost):
+            return self.add_arc_with_capacity_and_unit_cost(tail, head, capacity, unit_cost)
+
+        def SetNodeSupply(self, node, supply):
+            return self.set_node_supply(node, supply)
+
+        def Solve(self):
+            return self.solve()
+
+        def NumArcs(self):
+            return self.num_arcs()
+
+        def Tail(self, arc):
+            return self.tail(arc)
+
+        def Head(self, arc):
+            return self.head(arc)
+
+        def Flow(self, arc):
+            return self.flow(arc)
+
+        def UnitCost(self, arc):
+            return self.unit_cost(arc)
+
+        def OptimalCost(self):
+            return self.optimal_cost()
+
+    class pywrapgraph:
+        SimpleMinCostFlow = _SimpleMinCostFlowCompat
 import time
 
 

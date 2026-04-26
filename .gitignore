@@ -57,3 +57,6 @@ lane3d_1000_training.tar
 lane3d_1000_validation_test.tar
 lane3d_300.tar
 origin_ONCE_3DLanes.tar
+
+.codex-backups
+.tmp_mmcv

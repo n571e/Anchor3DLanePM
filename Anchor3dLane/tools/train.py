@@ -2,6 +2,7 @@
 import argparse
 import os
 import os.path as osp
+from pprint import pformat
 import shutil
 import time
 import pdb
@@ -24,6 +25,23 @@ from mmseg.apis import init_random_seed, set_random_seed
 from mmseg.datasets import build_dataloader, build_dataset
 from mmseg.models import build_lanedetector
 from mmseg.utils import build_ddp, build_dp, get_device, setup_multi_processes, get_root_logger, collect_env
+
+
+def render_config_text(cfg):
+    try:
+        return cfg.pretty_text
+    except TypeError as exc:
+        if 'verify' not in str(exc):
+            raise
+        blocks = ['# Fallback config render generated without yapf verify support.\n']
+        for key, value in cfg._cfg_dict.to_dict().items():
+            blocks.append(f'{key} = {pformat(value, width=100)}\n')
+        return '\n'.join(blocks)
+
+
+def safe_dump_config(cfg, path):
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(render_config_text(cfg))
 
 
 def parse_args():
@@ -91,7 +109,7 @@ def parse_args():
         choices=['none', 'pytorch', 'slurm', 'mpi'],
         default='none',
         help='job launcher')
-    parser.add_argument('--local_rank', type=int, default=0)
+    parser.add_argument('--local_rank', '--local-rank', dest='local_rank', type=int, default=0)
     parser.add_argument(
         '--auto-resume',
         action='store_true',
@@ -292,7 +310,7 @@ def main():
     # create work_dir
     mmcv.mkdir_or_exist(osp.abspath(cfg.work_dir))
     # dump config
-    cfg.dump(osp.join(cfg.work_dir, osp.basename(args.config)))
+    safe_dump_config(cfg, osp.join(cfg.work_dir, osp.basename(args.config)))
     # init the logger before other steps
     timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
     log_file = osp.join(cfg.work_dir, f'{timestamp}.log')
@@ -314,7 +332,7 @@ def main():
 
     # log some basic info
     logger.info(f'Distributed training: {distributed}')
-    logger.info(f'Config:\n{cfg.pretty_text}')
+    logger.info(f'Config:\n{render_config_text(cfg)}')
 
     # set random seeds
     cfg.device = get_device()
