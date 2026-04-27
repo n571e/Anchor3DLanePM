@@ -218,3 +218,11 @@
 - 模块改动 3：复杂度分析：补充相对Anchor3DLane++的前向开销与训练开销来源说明，强调新增成本主要来自target building而非模型主体。
 - 涉及文件：V1_METHOD_DESIGN.md, V1_EXECUTION_PLAN.md
 - Git 快照：`main` @ `a98f7246c05a`
+## 2026-04-26 23:57:33 | 代码 | BundleLane首轮frame骨架落地
+- 摘要：基于Anchor3DLane++实现BundleLane首轮代码骨架，包含bundle frame预测、frame-conditioned anchor注入与frame loss。
+- 模块改动 1：模型骨架：新增BundleLaneDetector、BundleFrameHead与BundleAnchorGenerator，以子类形式复用Anchor3DLane++主链，并在stage0支持bundle frame注入。
+- 模块改动 2：监督接入：在不改原始LaneLossV2与HungarianMatcher的前提下，为detector新增bundle frame target构造与frame loss计算，保持absolute proposal训练链路稳定。
+- 模块改动 3：配置与注册：新增bundlelane_r18配置并注册BundleLaneDetector，完成首轮可构建实验入口。
+- 模块改动 4：基础验证：使用anchor3dlane-cu121环境验证新配置可成功build模型，并用伪造GT样本跑通bundle frame target与frame loss。
+- 涉及文件：mmseg/models/lane_detector/anchor_3dlane_bundle.py, mmseg/models/lane_detector/__init__.py, ../configs_v2/openlane/bundlelane_r18.py
+- Git 快照：`main` @ `caf839884b9a`

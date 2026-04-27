@@ -1,4 +1,5 @@
 from .anchor_3dlane import Anchor3DLane
+from .anchor_3dlane_bundle import BundleLaneDetector
 from .anchor_3dlane_deform import Anchor3DLaneDeform
 from .anchor_3dlane_multiframe import Anchor3DLaneMF
 from .anchor_3dlane_pe import PEAnchor3DLanePP
@@ -12,6 +13,7 @@ __all__ = [
     'Anchor3DLaneMF',
     'Anchor3DLaneDeform',
     'Anchor3DLanePP',
+    'BundleLaneDetector',
     'PEAnchor3DLanePP',
     'Anchor3DLanePPFuse',
 ]
