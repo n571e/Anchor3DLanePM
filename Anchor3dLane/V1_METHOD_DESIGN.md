@@ -260,7 +260,47 @@ flowchart TB
     C --> J
 ```
 
-### 6.3 设计原则
+### 6.3 相对 `Anchor3DLane++` 的改进框架图
+
+```mermaid
+flowchart LR
+    subgraph A["Anchor3DLane++ baseline"]
+        A1["Backbone + FPN"] --> A2["PAAG / ExpertDecode"]
+        A2 --> A3["Absolute anchor prior<br/>start_x / yaw / pitch"]
+        A3 --> A4["Projection sampling + iterative regression"]
+        A4 --> A5["Direct absolute regression<br/>x(y), z(y), vis(y), cls"]
+        A5 --> A6["Hungarian + LaneLossV2 + NMS/Eval"]
+    end
+
+    subgraph B["BundleLane current plan"]
+        B1["Reuse Backbone + FPN"] --> B2["Reuse PAAG / ExpertDecode"]
+        B1 --> B3["New Bundle Frame Head<br/>predict x_ref(y), h(y), b(y)"]
+        B2 --> B4["Modified anchor prior<br/>frame-conditioned anchor"]
+        B3 --> B4
+        B4 --> B5["Reuse projection sampling + iterative regression"]
+        B5 --> B6["Change output semantics<br/>relative d(y), r(y), span, v(y), cls"]
+        B3 --> B7["Absolute reconstruction<br/>x = x_ref + d<br/>z = h + b*d + r"]
+        B6 --> B7
+        B7 --> B8["Reuse NMS + existing evaluator"]
+        B6 --> B9["Planned in V1.1<br/>intrinsic matcher + structure loss"]
+        B3 --> B9
+    end
+```
+
+相对原始 `Anchor3DLane++`，当前方案的改进主线可以压缩成四点：
+
+- 表示层：从“每条 lane 直接回归绝对 `x/z/vis`”改成“先预测共享 `bundle frame`，再回归每条 lane 的相对偏移与残差”。
+- anchor 层：从绝对 `start_x / yaw / pitch` 展开，改成在 `x_ref/h/b` 条件下生成 `frame-conditioned anchor`，把道路共享低频几何前置吸收。
+- 解码层：把结构终点从逐点 `vis` 中拆出来，新增 `support interval`，后续用 `span gate * local vis` 恢复可见性。
+- 训练层：`V1` 先复用原始 `LaneLossV2 + Hungarian matcher` 保证收敛，再在 `V1.1` 把 matcher 与结构约束迁移到 `intrinsic space`。
+
+这也解释了为什么它不是在 baseline 上“多加几个 auxiliary head”，而是把任务拆分顺序改成：
+
+1. 先解释场景内共享道路几何。
+2. 再解释单条 lane 相对共享几何的差异。
+3. 最后再恢复绝对输出并对接现有评测链路。
+
+### 6.4 设计原则
 
 - 不引入 dense road surface GT
 - 不重写现有评测协议

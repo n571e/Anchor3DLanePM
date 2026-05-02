@@ -36,6 +36,34 @@
 2. regression 的表示方式
 3. 额外监督如何尽量少而稳地接入
 
+### 2.1 当前计划的工程框架图
+
+```mermaid
+flowchart LR
+    A["Reuse Anchor3DLanePP<br/>backbone + FPN + sampling + iterative regression"] --> B["New BundleFrameHead<br/>predict x_ref / h / bank"]
+    A --> C["Reuse PAAG / ExpertDecode<br/>predict initial xs / yaw / pitch"]
+    B --> D["Modified BundleAnchorGenerator<br/>frame-conditioned anchors"]
+    C --> D
+    D --> E["Reuse absolute proposal tensor<br/>x/z/vis/cls layout unchanged"]
+    E --> F["Reuse LaneLossV2 + Hungarian matcher<br/>keep NMS / evaluator unchanged"]
+    B --> G["New frame target builder + frame losses"]
+    F -. V1 next .-> H["Add span head + intrinsic dict"]
+    H -. V1.1 .-> I["Add intrinsic matcher + LaneLossBundle"]
+```
+
+如果只看“相对 `Anchor3DLane++` 改了什么”，当前工程计划其实很聚焦：
+
+- 复用主链：`feature_extractor()`、投影采样、iterative regression、proposal tensor、NMS、evaluator 都尽量不动。
+- 新增共享分支：增加 `BundleFrameHead` 预测 `x_ref/h/bank`，这是所有后续 intrinsic 表示的入口。
+- 改造 anchor 几何：把原始 absolute anchor 生成器替换为 `BundleAnchorGenerator`，让 anchor 从共享 frame 出发而不是从绝对平地假设出发。
+- 保持训练稳定：`V1` 继续复用原始 absolute proposal loss 和 matcher，只增量加入 frame 监督，避免表示和匹配同时漂移。
+
+按当前代码状态划分，边界大致如下：
+
+- 已落地：`BundleLaneDetector` 子类骨架、`BundleFrameHead`、`BundleAnchorGenerator`、frame target 构造、frame losses、`bundlelane_r18.py` 配置入口。
+- `V1` 待补：`span head`、`d/r/span/v` 中间字典、真正的 intrinsic 解码写回 proposal。
+- `V1.1` 再做：`IntrinsicHungarianMatcher`、`LaneLossBundle`、order/nocross 等结构约束。
+
 ## 3. 推荐目录与文件改动
 
 ### 3.1 新增文件
@@ -572,11 +600,21 @@ model = dict(
 )
 ```
 
-建议额外准备三个 ablation config：
+建议把 `V1` 改成明确的 ablation-first 节奏，而不是“代码先堆完再一起训练”。
 
-- `bundlelane_frame_only_r18.py`
+当前首轮已经可落地的消融矩阵建议固定为：
+
+- `anchor3dlanepp_ablation_baseline_r18_20k.py`
+  同一单卡、同一 batch size、同一 20000 iter 口径下的 baseline control。
+- `bundlelane_ablation_frame_only_r18_20k.py`
+  只保留 `BundleFrameHead + frame loss`，关闭 `frame-conditioned anchor` 注入，用来回答“共享 frame 本身是否可学、是否有价值”。
+- `bundlelane_ablation_frame_anchor_r18_20k.py`
+  在 `frame-only` 基础上打开 `inject_iters=[0]`，用来回答“frame-conditioned anchor 是否带来额外收益”。
+
+`V1.1` 再继续扩展：
+
 - `bundlelane_decode_only_r18.py`
-- `bundlelane_match_r18.py`  `# V1.1`
+- `bundlelane_match_r18.py`
 
 ## 11. 建议的开发顺序
 
@@ -592,6 +630,8 @@ model = dict(
 
 - 验证 `x_ref/h/bank` 可学
 - 写可视化脚本
+- 立刻启动 `bundlelane_ablation_frame_only_r18_20k.py`
+- 与 `anchor3dlanepp_ablation_baseline_r18_20k.py` 做同口径对照
 
 ### P1. Frame-conditioned anchor
 
@@ -605,6 +645,8 @@ model = dict(
 - 不改 matcher
 - 不改 proposal 格式
 - 先看远距 `z` 与整体稳定性
+- 代码接完后立刻启动 `bundlelane_ablation_frame_anchor_r18_20k.py`
+- 先只和 `frame-only` 做一跳对照，确认 anchor 注入本身有效
 
 ### P2. Intrinsic decoding
 
@@ -710,6 +752,7 @@ model = dict(
 而 `V1` 最关键的工程策略则是：
 
 - 先复用原始 `LaneLossV2 + HungarianMatcher`
+- 每接入一个新模块，就马上补对应 ablation 并启动训练
 - 只少量加入 bundle 专属监督
 - 等表示本身验证有效后，再逐步把 loss 和 matcher 真正迁到 intrinsic space
 
