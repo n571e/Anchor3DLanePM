@@ -78,6 +78,7 @@ class BundleLaneDetector(Anchor3DLanePP):
         self.bundle_center_tau = float(self.bundle_cfg.get('center_tau', 8.0))
         self.bundle_target_smooth_kernel = int(self.bundle_cfg.get('target_smooth_kernel', 3))
         self.bundle_inject_iters = set(self.bundle_cfg.get('inject_iters', [0]))
+        self.bundle_inject_strength = float(self.bundle_cfg.get('inject_strength', 1.0))
         self.frame_x_loss_weight = float(self.bundle_cfg.get('frame_x_loss_weight', 0.3))
         self.frame_h_loss_weight = float(self.bundle_cfg.get('frame_h_loss_weight', 0.3))
         self.frame_bank_loss_weight = float(self.bundle_cfg.get('frame_bank_loss_weight', 0.2))
@@ -151,6 +152,26 @@ class BundleLaneDetector(Anchor3DLanePP):
 
     def _use_bundle_injection(self, iter_idx, bundle_frame):
         return self.use_bundle_frame and bundle_frame is not None and iter_idx in self.bundle_inject_iters
+
+    def _generate_bundle_anchors(self, xs, yaws, pitches, bundle_frame):
+        base_anchors = self.anchor_generator.generate_anchors_batch(xs, yaws, pitches)
+        if bundle_frame is None:
+            return base_anchors
+
+        bundle_anchors = self.anchor_generator.generate_anchors_batch(
+            xs,
+            yaws,
+            pitches,
+            x_ref=bundle_frame['x_ref'],
+            h_ref=bundle_frame['h'],
+            bank=bundle_frame['bank'],
+        )
+        strength = min(max(self.bundle_inject_strength, 0.0), 1.0)
+        if strength <= 0.0:
+            return base_anchors
+        if strength >= 1.0:
+            return bundle_anchors
+        return base_anchors + (bundle_anchors - base_anchors) * strength
 
     def _weighted_median(self, values, weights):
         sort_idx = torch.argsort(values)
@@ -362,13 +383,11 @@ class BundleLaneDetector(Anchor3DLanePP):
             reg_lane_priors = torch.tanh(reg_lane_priors.reshape(batch_size, -1, 3))
             lane_priors = reg_lane_priors + proposals_prev[..., 2:5]
             if self._use_bundle_injection(iter_idx, bundle_frame):
-                cur_anchors = self.anchor_generator.generate_anchors_batch(
+                cur_anchors = self._generate_bundle_anchors(
                     lane_priors[:, :, 2],
                     lane_priors[:, :, 0],
                     lane_priors[:, :, 1],
-                    x_ref=bundle_frame['x_ref'],
-                    h_ref=bundle_frame['h'],
-                    bank=bundle_frame['bank'],
+                    bundle_frame,
                 )
             else:
                 cur_anchors = self.anchor_generator.generate_anchors_batch(
@@ -425,13 +444,11 @@ class BundleLaneDetector(Anchor3DLanePP):
                         pitches = (pitch_weights @ init_pitch).squeeze(-1)
                         xs = (x_weights @ init_xs).squeeze(-1)
                         if self._use_bundle_injection(iter_idx, bundle_frame):
-                            anchors = self.anchor_generator.generate_anchors_batch(
+                            anchors = self._generate_bundle_anchors(
                                 xs,
                                 yaws,
                                 pitches,
-                                x_ref=bundle_frame['x_ref'],
-                                h_ref=bundle_frame['h'],
-                                bank=bundle_frame['bank'],
+                                bundle_frame,
                             )
                         else:
                             anchors = self.anchor_generator.generate_anchors_batch(xs, yaws, pitches)
