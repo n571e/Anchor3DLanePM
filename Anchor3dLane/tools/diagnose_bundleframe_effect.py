@@ -125,8 +125,19 @@ def summarize_injection_effect(model, batch, on_iters):
     metrics = {}
     bundle_frame = out_on.get('bundle_frame')
     if bundle_frame is not None:
-        for name in ('x_ref', 'h', 'bank', 'alpha_x', 'alpha_h', 'alpha_b'):
-            metrics.update(tensor_stats(bundle_frame[name], name))
+        for name in ('x_ref', 'h', 'bank', 'alpha_x', 'alpha_h', 'alpha_b',
+                     'inject_gate', 'inject_gate_logit'):
+            if name in bundle_frame:
+                metrics.update(tensor_stats(bundle_frame[name], name))
+        for name, prefix in (
+                ('anchor_inject_gates', 'anchor_gate'),
+                ('anchor_inject_gate_logits', 'anchor_gate_logit')):
+            if name in bundle_frame:
+                for gate_key, gate_tensor in bundle_frame[name].items():
+                    metrics.update(tensor_stats(gate_tensor, f'{prefix}_{gate_key}'))
+        if 'feature_biases' in bundle_frame:
+            for bias_key, bias_tensor in bundle_frame['feature_biases'].items():
+                metrics.update(tensor_stats(bias_tensor, f'feature_bias_{bias_key}'))
         metrics.update(frame_target_stats(model, bundle_frame, batch['gt_3dlanes']))
         frame_losses = model._compute_bundle_frame_losses(bundle_frame, batch['gt_3dlanes'])
         for name, value in frame_losses.items():
@@ -175,6 +186,12 @@ def summarize_gradients(model, batch, on_iters):
     metrics['bundle_supervision_loss'] = float(frame_loss.detach().cpu())
     metrics['bundle_supervision_grad_norm_sum'] = norm
     metrics['bundle_supervision_grad_tensors'] = tensors
+    norm, tensors = grad_norm(getattr(model, 'bundle_anchor_gate_layers', torch.nn.ModuleDict()))
+    metrics['bundle_anchor_gate_supervision_grad_norm_sum'] = norm
+    metrics['bundle_anchor_gate_supervision_grad_tensors'] = tensors
+    norm, tensors = grad_norm(getattr(model, 'bundle_feature_bias_layers', torch.nn.ModuleDict()))
+    metrics['bundle_feature_bias_supervision_grad_norm_sum'] = norm
+    metrics['bundle_feature_bias_supervision_grad_tensors'] = tensors
 
     model.zero_grad(set_to_none=True)
     out = model.encoder_decoder(batch['img'], batch['mask'], project_matrix)
@@ -185,6 +202,12 @@ def summarize_gradients(model, batch, on_iters):
     metrics['total_loss'] = float(total_loss.detach().cpu())
     metrics['bundle_total_grad_norm_sum'] = norm
     metrics['bundle_total_grad_tensors'] = tensors
+    norm, tensors = grad_norm(getattr(model, 'bundle_anchor_gate_layers', torch.nn.ModuleDict()))
+    metrics['bundle_anchor_gate_total_grad_norm_sum'] = norm
+    metrics['bundle_anchor_gate_total_grad_tensors'] = tensors
+    norm, tensors = grad_norm(getattr(model, 'bundle_feature_bias_layers', torch.nn.ModuleDict()))
+    metrics['bundle_feature_bias_total_grad_norm_sum'] = norm
+    metrics['bundle_feature_bias_total_grad_tensors'] = tensors
 
     model.zero_grad(set_to_none=True)
     return metrics
@@ -208,6 +231,10 @@ def classify_effect(model, summary):
     if not model.use_bundle_frame:
         return 'bundle_frame_disabled'
     if summary.get('anchor_delta_max_across_stages_max', 0.0) <= 1e-6:
+        if getattr(model, 'bundle_use_feature_bias', False):
+            if summary.get('bundle_feature_bias_total_grad_norm_sum_mean', 0.0) > 1e-8:
+                return 'feature_bias_active_without_geometry_injection'
+            return 'feature_bias_configured_but_no_geometry_delta'
         return 'injection_path_inactive'
     if summary.get('bundle_frame_loss_sum_mean', 0.0) <= 1e-8:
         return 'frame_supervision_inactive'
@@ -278,6 +305,28 @@ def main():
         'configured_inject_iters': configured_iters,
         'measured_inject_iters': on_iters,
         'inject_strength': getattr(model, 'bundle_inject_strength', None),
+        'inject_x': getattr(model, 'bundle_inject_x', None),
+        'inject_z': getattr(model, 'bundle_inject_z', None),
+        'detach_feature': getattr(model, 'bundle_detach_feature', None),
+        'inject_pre_prior': getattr(model, 'bundle_inject_pre_prior', None),
+        'use_inject_gate': getattr(model, 'bundle_use_inject_gate', None),
+        'inject_gate_min': getattr(model, 'bundle_inject_gate_min', None),
+        'inject_gate_max': getattr(model, 'bundle_inject_gate_max', None),
+        'use_anchor_gate': getattr(model, 'bundle_use_anchor_gate', None),
+        'anchor_gate_min': getattr(model, 'bundle_anchor_gate_min', None),
+        'anchor_gate_max': getattr(model, 'bundle_anchor_gate_max', None),
+        'use_feature_bias': getattr(model, 'bundle_use_feature_bias', None),
+        'feature_bias_scale': getattr(model, 'bundle_feature_bias_scale', None),
+        'feature_bias_detach_frame': getattr(model, 'bundle_feature_bias_detach_frame', None),
+        'feature_bias_iters': (
+            None if getattr(model, 'bundle_feature_bias_iters', None) is None
+            else sorted(getattr(model, 'bundle_feature_bias_iters'))),
+        'feature_bias_feat_indices': (
+            None if getattr(model, 'bundle_feature_bias_feat_indices', None) is None
+            else sorted(getattr(model, 'bundle_feature_bias_feat_indices'))),
+        'inject_delta_clip': getattr(model, 'bundle_inject_delta_clip', None),
+        'inject_x_delta_clip': getattr(model, 'bundle_inject_x_delta_clip', None),
+        'inject_z_delta_clip': getattr(model, 'bundle_inject_z_delta_clip', None),
         'effect_classification': classify_effect(model, summary),
         'summary': summary,
         'batches': batch_metrics,

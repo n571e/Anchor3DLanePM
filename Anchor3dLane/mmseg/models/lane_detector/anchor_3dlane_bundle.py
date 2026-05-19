@@ -40,18 +40,18 @@ class BundleAnchorGenerator(AnchorGenerator_torch):
 
         start_x = (xs[..., None] + 1) / 2 * (self.x_max - self.x_min) + self.x_min
         start_offset = start_x - x_ref[..., :1]
-        yaw_delta = (y_steps - self.y_steps[0]) * torch.tan(yaws[..., None] * math.pi)
+        yaw_delta = (y_steps - 1) * torch.tan(yaws[..., None] * math.pi)
         x_coords = x_ref + start_offset + yaw_delta
         anchors[..., 5:5 + self.anchor_len] = x_coords
 
-        pitch_delta = (y_steps - self.y_steps[0]) * torch.tan(pitches[..., None] * math.pi)
+        pitch_delta = (y_steps - 1) * torch.tan(pitches[..., None] * math.pi)
         z_coords = h_ref + bank * (x_coords - x_ref) + pitch_delta
         anchors[..., 5 + self.anchor_len:5 + self.anchor_len * 2] = z_coords
         return anchors
 
 
 class BundleFrameHead(nn.Module):
-    def __init__(self, in_channels, hidden_dim, basis_dims):
+    def __init__(self, in_channels, hidden_dim, basis_dims, use_gate=False, gate_init_bias=0.0):
         super().__init__()
         self.pool = nn.AdaptiveAvgPool2d(1)
         self.shared = nn.Sequential(
@@ -61,11 +61,18 @@ class BundleFrameHead(nn.Module):
         self.head_x = nn.Linear(hidden_dim, basis_dims['x'])
         self.head_h = nn.Linear(hidden_dim, basis_dims['h'])
         self.head_b = nn.Linear(hidden_dim, basis_dims['b'])
+        self.head_gate = nn.Linear(hidden_dim, 1) if use_gate else None
+        if self.head_gate is not None:
+            nn.init.zeros_(self.head_gate.weight)
+            nn.init.constant_(self.head_gate.bias, gate_init_bias)
 
     def forward(self, feature):
         pooled = self.pool(feature).flatten(1)
         hidden = self.shared(pooled)
-        return self.head_x(hidden), self.head_h(hidden), self.head_b(hidden)
+        outputs = [self.head_x(hidden), self.head_h(hidden), self.head_b(hidden)]
+        if self.head_gate is not None:
+            outputs.append(self.head_gate(hidden))
+        return tuple(outputs)
 
 
 @LANENET2S.register_module()
@@ -79,6 +86,47 @@ class BundleLaneDetector(Anchor3DLanePP):
         self.bundle_target_smooth_kernel = int(self.bundle_cfg.get('target_smooth_kernel', 3))
         self.bundle_inject_iters = set(self.bundle_cfg.get('inject_iters', [0]))
         self.bundle_inject_strength = float(self.bundle_cfg.get('inject_strength', 1.0))
+        self.bundle_use_inject_gate = bool(self.bundle_cfg.get('use_inject_gate', False))
+        self.bundle_inject_gate_min = float(self.bundle_cfg.get('inject_gate_min', 0.0))
+        self.bundle_inject_gate_max = float(self.bundle_cfg.get('inject_gate_max', 1.0))
+        self.bundle_inject_gate_init_bias = float(self.bundle_cfg.get('inject_gate_init_bias', 0.0))
+        self.bundle_inject_pre_prior = bool(self.bundle_cfg.get('inject_pre_prior', True))
+        self.bundle_use_anchor_gate = bool(self.bundle_cfg.get('use_anchor_gate', False))
+        self.bundle_anchor_gate_min = float(self.bundle_cfg.get('anchor_gate_min', 0.0))
+        self.bundle_anchor_gate_max = float(self.bundle_cfg.get('anchor_gate_max', 1.0))
+        self.bundle_anchor_gate_init_bias = float(self.bundle_cfg.get('anchor_gate_init_bias', 0.0))
+        self.bundle_use_feature_bias = bool(self.bundle_cfg.get('use_feature_bias', False))
+        self.bundle_feature_bias_scale = float(self.bundle_cfg.get('feature_bias_scale', 1.0))
+        self.bundle_feature_bias_detach_frame = bool(
+            self.bundle_cfg.get('feature_bias_detach_frame', False))
+        feature_bias_iters = self.bundle_cfg.get('feature_bias_iters', None)
+        self.bundle_feature_bias_iters = (
+            None if feature_bias_iters is None else {int(i) for i in feature_bias_iters})
+        feature_bias_feat_indices = self.bundle_cfg.get(
+            'feature_bias_feat_indices',
+            self.bundle_cfg.get('feature_bias_feat_idxs', None),
+        )
+        self.bundle_feature_bias_feat_indices = (
+            None if feature_bias_feat_indices is None
+            else {int(i) for i in feature_bias_feat_indices})
+        inject_delta_clip = self.bundle_cfg.get('inject_delta_clip', None)
+        inject_x_delta_clip = self.bundle_cfg.get('inject_x_delta_clip', None)
+        inject_z_delta_clip = self.bundle_cfg.get('inject_z_delta_clip', None)
+        self.bundle_inject_delta_clip = (
+            float(inject_delta_clip) if inject_delta_clip is not None else None)
+        self.bundle_inject_x_delta_clip = (
+            float(inject_x_delta_clip) if inject_x_delta_clip is not None else None)
+        self.bundle_inject_z_delta_clip = (
+            float(inject_z_delta_clip) if inject_z_delta_clip is not None else None)
+        inject_components = self.bundle_cfg.get('inject_components', None)
+        if inject_components is None:
+            self.bundle_inject_x = bool(self.bundle_cfg.get('inject_x', True))
+            self.bundle_inject_z = bool(self.bundle_cfg.get('inject_z', True))
+        else:
+            inject_components = set(inject_components)
+            self.bundle_inject_x = 'x' in inject_components
+            self.bundle_inject_z = bool({'z', 'h', 'height', 'bank', 'hbank'} & inject_components)
+        self.bundle_detach_feature = bool(self.bundle_cfg.get('detach_feature', False))
         self.frame_x_loss_weight = float(self.bundle_cfg.get('frame_x_loss_weight', 0.3))
         self.frame_h_loss_weight = float(self.bundle_cfg.get('frame_h_loss_weight', 0.3))
         self.frame_bank_loss_weight = float(self.bundle_cfg.get('frame_bank_loss_weight', 0.2))
@@ -102,7 +150,13 @@ class BundleLaneDetector(Anchor3DLanePP):
             )
             in_channels = int(self.bundle_cfg.get('in_channels', self.anchor_feat_channels))
             hidden_dim = int(self.bundle_cfg.get('hidden_dim', max(self.anchor_feat_channels, 64)))
-            self.bundle_frame_head = BundleFrameHead(in_channels, hidden_dim, basis_dims)
+            self.bundle_frame_head = BundleFrameHead(
+                in_channels,
+                hidden_dim,
+                basis_dims,
+                use_gate=self.bundle_use_inject_gate,
+                gate_init_bias=self.bundle_inject_gate_init_bias,
+            )
             self.register_buffer(
                 'bundle_basis_x',
                 self._build_bundle_basis(basis_dims['x'], normalize_center=True),
@@ -118,8 +172,33 @@ class BundleLaneDetector(Anchor3DLanePP):
                 self._build_bundle_basis(basis_dims['b'], normalize_center=False),
                 persistent=False,
             )
+            self.bundle_anchor_gate_layers = nn.ModuleDict()
+            if self.bundle_use_anchor_gate:
+                gate_in_channels = self.proj_channel * self.anchor_feat_len
+                for feat_idx in range(self.feat_num):
+                    gate_layers = nn.ModuleList()
+                    for _ in range(self.iter_reg):
+                        gate_layer = nn.Linear(gate_in_channels, 1)
+                        nn.init.zeros_(gate_layer.weight)
+                        nn.init.constant_(gate_layer.bias, self.bundle_anchor_gate_init_bias)
+                        gate_layers.append(gate_layer)
+                    self.bundle_anchor_gate_layers[f'layer_{feat_idx}'] = gate_layers
+            self.bundle_feature_bias_layers = nn.ModuleDict()
+            if self.bundle_use_feature_bias:
+                frame_code_dim = basis_dims['x'] + basis_dims['h'] + basis_dims['b']
+                bias_dim = self.proj_channel * self.anchor_feat_len
+                for feat_idx in range(self.feat_num):
+                    bias_layers = nn.ModuleList()
+                    for _ in range(self.iter_reg):
+                        bias_layer = nn.Linear(frame_code_dim, bias_dim)
+                        nn.init.zeros_(bias_layer.weight)
+                        nn.init.zeros_(bias_layer.bias)
+                        bias_layers.append(bias_layer)
+                    self.bundle_feature_bias_layers[f'layer_{feat_idx}'] = bias_layers
         else:
             self.bundle_frame_head = None
+            self.bundle_anchor_gate_layers = nn.ModuleDict()
+            self.bundle_feature_bias_layers = nn.ModuleDict()
             self.register_buffer('bundle_basis_x', torch.empty(0), persistent=False)
             self.register_buffer('bundle_basis_h', torch.empty(0), persistent=False)
             self.register_buffer('bundle_basis_b', torch.empty(0), persistent=False)
@@ -137,11 +216,14 @@ class BundleLaneDetector(Anchor3DLanePP):
         return torch.stack(basis, dim=1)
 
     def _predict_bundle_frame(self, feature):
-        alpha_x, alpha_h, alpha_b = self.bundle_frame_head(feature)
+        if self.bundle_detach_feature:
+            feature = feature.detach()
+        head_outputs = self.bundle_frame_head(feature)
+        alpha_x, alpha_h, alpha_b = head_outputs[:3]
         x_ref = alpha_x @ self.bundle_basis_x.t()
         h_ref = alpha_h @ self.bundle_basis_h.t()
         bank = alpha_b @ self.bundle_basis_b.t()
-        return {
+        bundle_frame = {
             'x_ref': x_ref,
             'h': h_ref,
             'bank': bank,
@@ -149,13 +231,66 @@ class BundleLaneDetector(Anchor3DLanePP):
             'alpha_h': alpha_h,
             'alpha_b': alpha_b,
         }
+        if len(head_outputs) > 3:
+            gate = torch.sigmoid(head_outputs[3])
+            gate_span = self.bundle_inject_gate_max - self.bundle_inject_gate_min
+            bundle_frame['inject_gate'] = self.bundle_inject_gate_min + gate * gate_span
+            bundle_frame['inject_gate_logit'] = head_outputs[3]
+        if self.bundle_use_anchor_gate:
+            bundle_frame['anchor_inject_gates'] = {}
+            bundle_frame['anchor_inject_gate_logits'] = {}
+        if self.bundle_use_feature_bias:
+            bundle_frame['feature_biases'] = {}
+        return bundle_frame
 
     def _use_bundle_injection(self, iter_idx, bundle_frame):
         return self.use_bundle_frame and bundle_frame is not None and iter_idx in self.bundle_inject_iters
 
-    def _generate_bundle_anchors(self, xs, yaws, pitches, bundle_frame):
+    def _compute_anchor_inject_gate(self, anchor_features, feat_idx, iter_idx, bundle_frame):
+        if not self.bundle_use_anchor_gate or bundle_frame is None:
+            return None
+
+        gate_logits = self.bundle_anchor_gate_layers[f'layer_{feat_idx}'][iter_idx](anchor_features)
+        gate_logits = gate_logits.squeeze(-1)
+        gate = torch.sigmoid(gate_logits)
+        gate_span = self.bundle_anchor_gate_max - self.bundle_anchor_gate_min
+        gate = self.bundle_anchor_gate_min + gate * gate_span
+
+        gate_key = f'i{iter_idx}_f{feat_idx}'
+        if 'anchor_inject_gates' in bundle_frame:
+            bundle_frame['anchor_inject_gates'][gate_key] = gate
+        if 'anchor_inject_gate_logits' in bundle_frame:
+            bundle_frame['anchor_inject_gate_logits'][gate_key] = gate_logits
+        return gate
+
+    def _compute_bundle_feature_bias(self, feat_idx, iter_idx, bundle_frame):
+        if not self.bundle_use_feature_bias or bundle_frame is None:
+            return None
+        if (self.bundle_feature_bias_iters is not None
+                and iter_idx not in self.bundle_feature_bias_iters):
+            return None
+        if (self.bundle_feature_bias_feat_indices is not None
+                and feat_idx not in self.bundle_feature_bias_feat_indices):
+            return None
+
+        frame_code = torch.cat(
+            [bundle_frame['alpha_x'], bundle_frame['alpha_h'], bundle_frame['alpha_b']],
+            dim=1,
+        )
+        if self.bundle_feature_bias_detach_frame:
+            frame_code = frame_code.detach()
+        bias = self.bundle_feature_bias_layers[f'layer_{feat_idx}'][iter_idx](frame_code)
+        if self.bundle_feature_bias_scale != 1.0:
+            bias = bias * self.bundle_feature_bias_scale
+
+        bias_key = f'i{iter_idx}_f{feat_idx}'
+        if 'feature_biases' in bundle_frame:
+            bundle_frame['feature_biases'][bias_key] = bias
+        return bias
+
+    def _generate_bundle_anchors(self, xs, yaws, pitches, bundle_frame, anchor_gate=None):
         base_anchors = self.anchor_generator.generate_anchors_batch(xs, yaws, pitches)
-        if bundle_frame is None:
+        if bundle_frame is None or (not self.bundle_inject_x and not self.bundle_inject_z):
             return base_anchors
 
         bundle_anchors = self.anchor_generator.generate_anchors_batch(
@@ -166,12 +301,57 @@ class BundleLaneDetector(Anchor3DLanePP):
             h_ref=bundle_frame['h'],
             bank=bundle_frame['bank'],
         )
+        if self.bundle_inject_x and self.bundle_inject_z:
+            target_anchors = bundle_anchors
+        else:
+            target_anchors = base_anchors.clone()
+            x_slice = slice(5, 5 + self.anchor_len)
+            z_slice = slice(5 + self.anchor_len, 5 + self.anchor_len * 2)
+            if self.bundle_inject_x:
+                target_anchors[..., x_slice] = bundle_anchors[..., x_slice]
+            if self.bundle_inject_z:
+                if self.bundle_inject_x:
+                    target_anchors[..., z_slice] = bundle_anchors[..., z_slice]
+                else:
+                    x_ref = bundle_frame['x_ref'][:, None, :]
+                    h_ref = bundle_frame['h'][:, None, :]
+                    bank = bundle_frame['bank'][:, None, :]
+                    base_x = base_anchors[..., x_slice]
+                    base_z = base_anchors[..., z_slice]
+                    pitch_delta = base_z - float(self.anchor_generator.start_z)
+                    target_anchors[..., z_slice] = h_ref + bank * (base_x - x_ref) + pitch_delta
         strength = min(max(self.bundle_inject_strength, 0.0), 1.0)
         if strength <= 0.0:
             return base_anchors
+        delta = target_anchors - base_anchors
+        if self.bundle_inject_delta_clip is not None:
+            delta = delta.clamp(-self.bundle_inject_delta_clip, self.bundle_inject_delta_clip)
+        if self.bundle_inject_x_delta_clip is not None:
+            x_slice = slice(5, 5 + self.anchor_len)
+            delta[..., x_slice] = delta[..., x_slice].clamp(
+                -self.bundle_inject_x_delta_clip, self.bundle_inject_x_delta_clip)
+        if self.bundle_inject_z_delta_clip is not None:
+            z_slice = slice(5 + self.anchor_len, 5 + self.anchor_len * 2)
+            delta[..., z_slice] = delta[..., z_slice].clamp(
+                -self.bundle_inject_z_delta_clip, self.bundle_inject_z_delta_clip)
+        if 'inject_gate' not in bundle_frame:
+            if anchor_gate is not None:
+                gate = anchor_gate.to(device=base_anchors.device, dtype=base_anchors.dtype)
+                gate = gate.clamp(0.0, 1.0).view(gate.shape[0], gate.shape[1], 1)
+                return base_anchors + delta * (gate * strength)
+            if strength >= 1.0:
+                return base_anchors + delta
+            return base_anchors + delta * strength
+
+        gate = anchor_gate if anchor_gate is not None else bundle_frame['inject_gate']
+        gate = gate.to(device=base_anchors.device, dtype=base_anchors.dtype).clamp(0.0, 1.0)
+        if gate.dim() == 2:
+            gate = gate.view(gate.shape[0], gate.shape[1], 1)
+        else:
+            gate = gate.view(gate.shape[0], 1, 1)
         if strength >= 1.0:
-            return bundle_anchors
-        return base_anchors + (bundle_anchors - base_anchors) * strength
+            return base_anchors + delta * gate
+        return base_anchors + delta * (gate * strength)
 
     def _weighted_median(self, values, weights):
         sort_idx = torch.argsort(values)
@@ -266,13 +446,14 @@ class BundleLaneDetector(Anchor3DLanePP):
             bank[step] = bank_val
             mask[step] = 1.0
 
-        x_ref, mask = self._interpolate_target(x_ref, mask)
-        h_ref, _ = self._interpolate_target(h_ref, mask)
-        bank, _ = self._interpolate_target(bank, mask)
-        x_ref = self._smooth_target(x_ref, mask)
-        h_ref = self._smooth_target(h_ref, mask)
-        bank = self._smooth_target(bank, mask)
-        return x_ref, h_ref, bank, mask
+        valid_mask = mask
+        x_ref, interp_mask = self._interpolate_target(x_ref, valid_mask)
+        h_ref, _ = self._interpolate_target(h_ref, valid_mask)
+        bank, _ = self._interpolate_target(bank, valid_mask)
+        x_ref = self._smooth_target(x_ref, interp_mask)
+        h_ref = self._smooth_target(h_ref, interp_mask)
+        bank = self._smooth_target(bank, interp_mask)
+        return x_ref, h_ref, bank, interp_mask
 
     def _compute_bundle_frame_losses(self, bundle_frame, gt_3dlanes):
         if not self.use_bundle_frame or bundle_frame is None:
@@ -367,6 +548,13 @@ class BundleLaneDetector(Anchor3DLanePP):
         batch_anchor_features = batch_anchor_features.transpose(1, 2)
         batch_anchor_features = batch_anchor_features.flatten(2, 3)
         batch_anchor_features = self.dynamic_head[f'layer_{feat_idx}'][iter_idx](batch_anchor_features)
+        feature_bias = self._compute_bundle_feature_bias(feat_idx, iter_idx, bundle_frame)
+        if feature_bias is not None:
+            batch_anchor_features = batch_anchor_features + feature_bias[:, None, :]
+        anchor_gate = None
+        if reg_prior and self._use_bundle_injection(iter_idx, bundle_frame):
+            anchor_gate = self._compute_anchor_inject_gate(
+                batch_anchor_features, feat_idx, iter_idx, bundle_frame)
         batch_anchor_features = batch_anchor_features.flatten(0, 1)
 
         cls_logits = self.cls_layer[f'layer_{feat_idx}'][iter_idx](batch_anchor_features)
@@ -388,6 +576,7 @@ class BundleLaneDetector(Anchor3DLanePP):
                     lane_priors[:, :, 0],
                     lane_priors[:, :, 1],
                     bundle_frame,
+                    anchor_gate=anchor_gate,
                 )
             else:
                 cur_anchors = self.anchor_generator.generate_anchors_batch(
@@ -443,7 +632,7 @@ class BundleLaneDetector(Anchor3DLanePP):
                         yaws = (yaw_weights @ init_yaw).squeeze(-1)
                         pitches = (pitch_weights @ init_pitch).squeeze(-1)
                         xs = (x_weights @ init_xs).squeeze(-1)
-                        if self._use_bundle_injection(iter_idx, bundle_frame):
+                        if self.bundle_inject_pre_prior and self._use_bundle_injection(iter_idx, bundle_frame):
                             anchors = self._generate_bundle_anchors(
                                 xs,
                                 yaws,
